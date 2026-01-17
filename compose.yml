@@ -1,0 +1,439 @@
+# ============================================================================
+# Docker Compose Configuration for PostgreSQL, pgAdmin, and Apache Airflow
+# ============================================================================
+# This compose file sets up a complete data orchestration environment with:
+# - PostgreSQL: Primary database for applications and Airflow metadata
+# - pgAdmin: Web-based PostgreSQL administration interface
+# - Apache Airflow: Workflow orchestration platform with CeleryExecutor
+# - Redis: Message broker for Airflow's distributed task queue
+#
+# Prerequisites:
+# 1. Create a .env file with all required environment variables
+# 2. Create directories: mkdir -p dags logs plugins config init-scripts
+# 3. (Optional) Add init-scripts/create-airflow-db.sh for Airflow database
+#
+# Usage:
+#   docker-compose up -d        # Start all services
+#   docker-compose down         # Stop all services
+#   docker-compose logs -f      # View logs
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # PostgreSQL Database
+  # ==========================================================================
+  # Primary PostgreSQL instance that serves as:
+  # 1. Application database (POSTGRES_DB)
+  # 2. Airflow metadata database (created via init scripts)
+  # ==========================================================================
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-18-alpine}
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Persistent data storage - survives container restarts
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      # Check if PostgreSQL is ready to accept connections
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    shm_size: ${POSTGRES_SHM_SIZE:-256mb}
+    # Performance tuning parameters - adjust based on available resources
+    command: >
+      postgres  -c max_connections=${POSTGRES_MAX_CONNECTIONS:-200} -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB} -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE:-1GB}
+    networks:
+      - postgres-network
+
+  # ==========================================================================
+  # pgAdmin - PostgreSQL Administration Interface
+  # ==========================================================================
+  # Web-based GUI for managing PostgreSQL databases
+  # Access at: http://localhost:8090 (or configured PGADMIN_PORT)
+  # ==========================================================================
+  pgadmin:
+    image: dpage/pgadmin4:${PGADMIN_VERSION:-latest}
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: ${PGADMIN_SERVER_MODE:-False}
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: ${PGADMIN_MASTER_PASSWORD_REQUIRED:-False}
+    ports:
+      - "${PGADMIN_PORT:-8090}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - postgres-network
+
+  # ==========================================================================
+  # Redis - Message Broker for Airflow
+  # ==========================================================================
+  # In-memory data store used by Airflow's CeleryExecutor for:
+  # - Task queue management
+  # - Worker communication
+  # - Real-time task status updates
+  # ==========================================================================
+  redis:
+    image: redis:${REDIS_VERSION:-8-alpine}
+    container_name: redis-airflow
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - postgres-network
+
+  # ==========================================================================
+  # Airflow Webserver - Web UI and API
+  # ==========================================================================
+  # Provides the Airflow web interface for:
+  # - DAG visualization and management
+  # - Task monitoring and logs
+  # - Connection and variable management
+  # - User authentication and authorization
+  #
+  # Access at: http://localhost:8081 (or configured AIRFLOW_WEBSERVER_PORT)
+  # ==========================================================================
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: custom-airflow:${AIRFLOW_VERSION:-2.10.4}
+    # image: apache/airflow:${AIRFLOW_VERSION:-2.10.4}
+    container_name: airflow-webserver
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      # Executor configuration - CeleryExecutor for distributed task execution
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW_EXECUTOR:-CeleryExecutor}
+      # Database connection for Airflow metadata (DAGs, tasks, logs, etc.)
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      # Celery result backend - stores task results in PostgreSQL
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      # Celery broker - Redis handles task queue
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      # Fernet key for encrypting sensitive data (connections, variables)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      # DAG behavior on creation
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_DAGS_PAUSED_AT_CREATION:-true}
+      # Whether to load Airflow example DAGs
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW_LOAD_EXAMPLES:-false}
+      # API authentication backends
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      # Enable health check endpoint
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      # User ID for file permissions
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      # Initial admin user credentials (used by airflow-init)
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    ports:
+      - "${AIRFLOW_WEBSERVER_PORT:-8081}:8080"
+    volumes:
+      # Mount directories for DAGs, logs, plugins, and config
+      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
+      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
+      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
+      - ./src:/opt/airflow/src
+      - ./.env:/opt/airflow/.env
+      - ./requirements.txt:/opt/airflow/requirements.txt
+    command: webserver
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - postgres-network
+
+  # ==========================================================================
+  # Airflow Scheduler - DAG Parsing and Task Scheduling
+  # ==========================================================================
+  # Core component that:
+  # - Parses DAG files to detect changes
+  # - Schedules tasks based on dependencies and schedule intervals
+  # - Monitors task execution and triggers retries
+  # - Maintains the overall workflow state
+  # ==========================================================================
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: custom-airflow:${AIRFLOW_VERSION:-2.10.4}
+    # image: apache/airflow:${AIRFLOW_VERSION:-2.10.4}
+    container_name: airflow-scheduler
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW_EXECUTOR:-CeleryExecutor}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_DAGS_PAUSED_AT_CREATION:-true}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW_LOAD_EXAMPLES:-false}
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    volumes:
+      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
+      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
+      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
+      - ./src:/opt/airflow/src
+      - ./.env:/opt/airflow/.env
+      - ./requirements.txt:/opt/airflow/requirements.txt
+    command: scheduler
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8974/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - postgres-network
+
+  # ==========================================================================
+  # Airflow Worker - Task Execution
+  # ==========================================================================
+  # Executes tasks scheduled by the scheduler:
+  # - Picks up tasks from the Redis queue
+  # - Runs task code in isolated processes
+  # - Reports task status and results back to scheduler
+  #
+  # Can scale horizontally - add more workers to increase capacity
+  # ==========================================================================
+  airflow-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: custom-airflow:${AIRFLOW_VERSION:-2.10.4}
+    # image: apache/airflow:${AIRFLOW_VERSION:-2.10.4}
+    container_name: airflow-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW_EXECUTOR:-CeleryExecutor}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_DAGS_PAUSED_AT_CREATION:-true}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW_LOAD_EXAMPLES:-false}
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    volumes:
+      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
+      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
+      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
+      - ./src:/opt/airflow/src
+      - ./.env:/opt/airflow/.env
+      - ./requirements.txt:/opt/airflow/requirements.txt
+    command: celery worker
+    healthcheck:
+      # Check if worker is responsive to Celery commands
+      test: [ "CMD-SHELL", 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"' ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - postgres-network
+
+  # ==========================================================================
+  # Airflow Triggerer - Deferrable Task Handler
+  # ==========================================================================
+  # Handles "deferrable" operators efficiently:
+  # - Allows tasks to wait for external events without blocking workers
+  # - Reduces resource usage for long-running waits (sensors, etc.)
+  # - Uses async I/O for scalability
+  #
+  # Required for modern Airflow features like deferrable operators
+  # ==========================================================================
+  airflow-triggerer:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: custom-airflow:${AIRFLOW_VERSION:-2.10.4}
+    # image: apache/airflow:${AIRFLOW_VERSION:-2.10.4}
+    container_name: airflow-triggerer
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW_EXECUTOR:-CeleryExecutor}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_DAGS_PAUSED_AT_CREATION:-true}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW_LOAD_EXAMPLES:-false}
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    volumes:
+      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
+      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
+      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
+      - ./src:/opt/airflow/src
+      - ./.env:/opt/airflow/.env
+      - ./requirements.txt:/opt/airflow/requirements.txt
+    command: triggerer
+    healthcheck:
+      test: [ "CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"' ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - postgres-network
+
+  # ==========================================================================
+  # Airflow Init - One-time Initialization
+  # ==========================================================================
+  # Runs once on first startup to:
+  # 1. Create necessary directories with correct permissions
+  # 2. Run database migrations (create Airflow tables)
+  # 3. Create initial admin user account
+  #
+  # This container exits after successful initialization
+  # Subsequent startups will skip initialization if DB is already set up
+  # ==========================================================================
+  airflow-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: custom-airflow:${AIRFLOW_VERSION:-2.10.4}
+    # image: apache/airflow:${AIRFLOW_VERSION:-2.10.4}
+    container_name: airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW_EXECUTOR:-CeleryExecutor}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${AIRFLOW_DB:-airflow}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_DAGS_PAUSED_AT_CREATION:-true}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW_LOAD_EXAMPLES:-false}
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      # Initialization flags
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    volumes:
+      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
+      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
+      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
+      - ./src:/opt/airflow/src
+      - ./.env:/opt/airflow/.env
+      - ./requirements.txt:/opt/airflow/requirements.txt
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        # Create directories if they don't exist
+        mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins
+        # Set correct ownership for Airflow user
+        chown -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins}
+        # Install your Python dependencies
+        if [ -f /opt/airflow/requirements.txt ]; then
+          pip install --user -r /opt/airflow/requirements.txt
+        fi
+        # Run Airflow initialization
+        exec /entrypoint airflow version
+    networks:
+      - postgres-network
+
+# ==============================================================================
+# Named Volumes - Persistent Data Storage
+# ==============================================================================
+# These volumes persist data across container restarts and recreations
+# Data is stored in Docker's volume directory (typically /var/lib/docker/volumes/)
+# ==============================================================================
+volumes:
+  postgres-data:
+    driver: local
+  pgadmin-data:
+    driver: local
+
+# ==============================================================================
+# Networks
+# ==============================================================================
+# Bridge network for inter-container communication
+# All services can communicate using service names as hostnames
+# Example: postgres:5432, redis:6379, airflow-webserver:8080
+# ==============================================================================
+networks:
+  postgres-network:
+    driver: bridge

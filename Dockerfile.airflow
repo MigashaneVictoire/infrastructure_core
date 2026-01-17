@@ -1,0 +1,7 @@
+FROM apache/airflow:2.10.4
+
+# Copy requirements file
+COPY requirements.txt /opt/airflow/requirements.txt
+
+# Install Python dependencies (without --user flag, Airflow handles this)
+RUN pip install --no-cache-dir -r /opt/airflow/requirements.txt
