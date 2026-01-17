@@ -436,4 +436,5 @@ volumes:
 # ==============================================================================
 networks:
   postgres-network:
+    name: infrastructure_core_postgres_network
     driver: bridge
