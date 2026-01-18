@@ -158,14 +158,14 @@ services:
     ports:
       - "${AIRFLOW_WEBSERVER_PORT:-8081}:8080"
     volumes:
-      # Mount directories for DAGs, logs, plugins, and config
-      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
-      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
-      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
-      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
-      - ./src:/opt/airflow/src
+      # Mount directories for DAGs, logs, plugins, and config from ETL repo
+      - ${AIRFLOW_ETL_DAGS_DIR:-../tabular_data_stream_etl/dags}:/opt/airflow/dags
+      - ${AIRFLOW_ETL_LOGS_DIR:-../tabular_data_stream_etl/logs}:/opt/airflow/logs
+      - ${AIRFLOW_ETL_PLUGINS_DIR:-../tabular_data_stream_etl/plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_ETL_CONFIG_DIR:-../tabular_data_stream_etl/config}:/opt/airflow/config
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/src:/opt/airflow/src
       - ./.env:/opt/airflow/.env
-      - ./requirements.txt:/opt/airflow/requirements.txt
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/requirements.txt:/opt/airflow/requirements.txt
     command: webserver
     healthcheck:
       test: [ "CMD", "curl", "--fail", "http://localhost:8080/health" ]
@@ -216,13 +216,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
     volumes:
-      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
-      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
-      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
-      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
-      - ./src:/opt/airflow/src
+      - ${AIRFLOW_ETL_DAGS_DIR:-../tabular_data_stream_etl/dags}:/opt/airflow/dags
+      - ${AIRFLOW_ETL_LOGS_DIR:-../tabular_data_stream_etl/logs}:/opt/airflow/logs
+      - ${AIRFLOW_ETL_PLUGINS_DIR:-../tabular_data_stream_etl/plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_ETL_CONFIG_DIR:-../tabular_data_stream_etl/config}:/opt/airflow/config
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/src:/opt/airflow/src
       - ./.env:/opt/airflow/.env
-      - ./requirements.txt:/opt/airflow/requirements.txt
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/requirements.txt:/opt/airflow/requirements.txt
     command: scheduler
     healthcheck:
       test: [ "CMD", "curl", "--fail", "http://localhost:8974/health" ]
@@ -273,13 +273,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
     volumes:
-      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
-      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
-      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
-      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
-      - ./src:/opt/airflow/src
+      - ${AIRFLOW_ETL_DAGS_DIR:-../tabular_data_stream_etl/dags}:/opt/airflow/dags
+      - ${AIRFLOW_ETL_LOGS_DIR:-../tabular_data_stream_etl/logs}:/opt/airflow/logs
+      - ${AIRFLOW_ETL_PLUGINS_DIR:-../tabular_data_stream_etl/plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_ETL_CONFIG_DIR:-../tabular_data_stream_etl/config}:/opt/airflow/config
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/src:/opt/airflow/src
       - ./.env:/opt/airflow/.env
-      - ./requirements.txt:/opt/airflow/requirements.txt
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/requirements.txt:/opt/airflow/requirements.txt
     command: celery worker
     healthcheck:
       # Check if worker is responsive to Celery commands
@@ -331,13 +331,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
     volumes:
-      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
-      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
-      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
-      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
-      - ./src:/opt/airflow/src
+      - ${AIRFLOW_ETL_DAGS_DIR:-../tabular_data_stream_etl/dags}:/opt/airflow/dags
+      - ${AIRFLOW_ETL_LOGS_DIR:-../tabular_data_stream_etl/logs}:/opt/airflow/logs
+      - ${AIRFLOW_ETL_PLUGINS_DIR:-../tabular_data_stream_etl/plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_ETL_CONFIG_DIR:-../tabular_data_stream_etl/config}:/opt/airflow/config
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/src:/opt/airflow/src
       - ./.env:/opt/airflow/.env
-      - ./requirements.txt:/opt/airflow/requirements.txt
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/requirements.txt:/opt/airflow/requirements.txt
     command: triggerer
     healthcheck:
       test: [ "CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"' ]
@@ -391,13 +391,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
     volumes:
-      - ${AIRFLOW_DAGS_DIR:-./dags}:/opt/airflow/dags
-      - ${AIRFLOW_LOGS_DIR:-./logs}:/opt/airflow/logs
-      - ${AIRFLOW_PLUGINS_DIR:-./plugins}:/opt/airflow/plugins
-      - ${AIRFLOW_CONFIG_DIR:-./config}:/opt/airflow/config
-      - ./src:/opt/airflow/src
+      - ${AIRFLOW_ETL_DAGS_DIR:-../tabular_data_stream_etl/dags}:/opt/airflow/dags
+      - ${AIRFLOW_ETL_LOGS_DIR:-../tabular_data_stream_etl/logs}:/opt/airflow/logs
+      - ${AIRFLOW_ETL_PLUGINS_DIR:-../tabular_data_stream_etl/plugins}:/opt/airflow/plugins
+      - ${AIRFLOW_ETL_CONFIG_DIR:-../tabular_data_stream_etl/config}:/opt/airflow/config
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/src:/opt/airflow/src
       - ./.env:/opt/airflow/.env
-      - ./requirements.txt:/opt/airflow/requirements.txt
+      - ${ETL_REPO_DIR:-../tabular_data_stream_etl}/requirements.txt:/opt/airflow/requirements.txt
     entrypoint: /bin/bash
     command:
       - -c
